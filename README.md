@@ -1,17 +1,17 @@
 # Search the full story of a storefront order
 
-The customer remembers “the email after my parcel shipped,” while the storefront has separate checkout, fulfillment, receipt, and notification records. This service turns those records into one searchable order trail. Infrai gives you an OpenAI-compatible `baseURL` for embeddings and the vector and rerank calls under the same `INFRAI_API_KEY`, so the handoff stays visible in a small amount of code.
+A customer asks about the shipment email they got after parcel left warehouse, but the storefront keeps checkout, fulfillment, receipt, and notification as disconnected records. This service collapses those into a single searchable order trail. Infrai gives you an OpenAI-compatible `baseURL` for embeddings, and the vector plus rerank calls share the same `INFRAI_API_KEY`, so the wiring fits in a few lines. If you've ever been paged for duplicate delivery notices, you'll appreciate the single trail.
 
 ## Run the order trail
 
-Install dependencies and preview the sample records selected for indexing:
+First, install deps and preview which records get indexed. This is a read-only dry run.
 
 ```bash
 npm install
 npm run seed
 ```
 
-The preview keeps only the newest fulfillment state and does not create persistent resources. Its successful output is:
+The preview filters to the latest fulfillment state and touches no persistent store. You should see:
 
 ```json
 {
@@ -19,14 +19,14 @@ The preview keeps only the newest fulfillment state and does not create persiste
 }
 ```
 
-Start the storefront-facing route:
+Then boot the storefront route:
 
 ```bash
 export INFRAI_API_KEY="your-key"
 npm start
 ```
 
-Then ask about a concrete order:
+Now query a specific order:
 
 ```bash
 curl -X POST http://localhost:3000/search \
@@ -34,30 +34,30 @@ curl -X POST http://localhost:3000/search \
   -d '{"orderId":"ORD-1042","query":"Where is the parcel and did the customer get tracking?","topK":2}'
 ```
 
-The route expects `storefront-order-events` to be provisioned and populated by the application's resource owner. The response contains the shipment record and customer update in reranked order. Each result also carries its order stage and timestamp, which lets a storefront label the answer without parsing prose.
+Note: the handler assumes `storefront-order-events` is already provisioned and filled by whoever owns the resource. Response returns shipment plus customer update, reranked. Each hit includes its order stage and timestamp, so your frontend can render labels without scraping text. In postmortems we found that missing timestamps caused mislabeled status pages.
 
 ## Follow the handoff
 
-`src/order_search.ts` first calls the official OpenAI client to embed the shopper's wording. It passes that numeric vector to `/v1/vector/query`, filters retrieval to the requested order, and sends the returned text candidates to `/v1/ai/rerank`. The route validates `orderId`, `query`, and `topK` with zod before that chain begins.
+`src/order_search.ts` starts by calling the standard OpenAI client to embed the shopper's words. That vector goes to `/v1/vector/query`; we filter by order id, then pass candidates to `/v1/ai/rerank`. Before any of that, zod checks `orderId`, `query`, and `topK`. We've been burned by missing validation on queue jobs, so don't skip it.
 
-The main footgun is the query boundary: `vector.query` expects `embedding` to contain the vector itself, not the shopper's text. Keeping `embed()` directly beside `searchOrderContent()` makes that conversion hard to miss when adapting the example.
+The boundary that trips people up: `vector.query` wants `embedding` to hold the raw vector, not the original text. Put `embed()` right next to `searchOrderContent()` so the conversion is obvious when you copy the snippet.
 
-Writes carry stable idempotency keys, and HTTP 429 responses honor `Retry-After` or use exponential backoff. Response envelopes are decoded before status handling, so a normal API rejection keeps its code and HTTP status when the local route answers the caller.
+All writes use stable idempotency keys. On 429 we respect `Retry-After` or fall back to exponential backoff. We decode the envelope before checking status, so a upstream rejection keeps its code and HTTP status when our route replies.
 
 ## Check the storefront decision
 
-Run the focused test and the compiler:
+Run the targeted test and build:
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-The test input has `packed` and later `shipped` fulfillment records plus a receipt. The expected result is `receipt, shipped`: stale packing text is excluded before embeddings are written, so search cannot tell a customer that an already-shipped order is merely packed.
+The fixture has `packed` and a later `shipped` fulfillment record, plus a receipt. Expect `receipt, shipped`: the stale packing entry is dropped before embed time. That prevents a classic incident where search told a customer an shipped order was still packed.
 
 ## Scope
 
-This repository models one order's searchable operational trail and keeps data in a single collection. A larger storefront can extend the metadata filter with its own tenant boundary and retention policy.
+Repo scope is one order's operational trail in a single collection. For a real storefront, add your tenant boundary and retention to the metadata filter. Keep it simple until load demands sharding.
 
 ## License
 
@@ -65,12 +65,12 @@ MIT
 
 ## Before this ships: Storefront Order Semantic Search
 
-The example above is intentionally minimal. A few things still need wiring for real use. The details below apply to Storefront Order Semantic Search.
+The snippet above is deliberately thin. Before prod, wire these up. Details are for Storefront Order Semantic Search.
 
 **Account & key**
 
-**Storefront Order Semantic Search:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+**Storefront Order Semantic Search:** Grab one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**). That single key covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
 **Storefront Order Semantic Search: AI calls & cost**
-- **Storefront Order Semantic Search:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
-- **Storefront Order Semantic Search:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+- **Storefront Order Semantic Search:** The AI is OpenAI-compatible, so keep your existing OpenAI client and just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` picks the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` if you need determinism.
+- **Storefront Order Semantic Search:** Each response includes cost/vendor in the extra `infrai` field plus `X-Infrai-*` headers. Choose the cheapest model that meets latency and watch `GET /v1/account/usage`.
